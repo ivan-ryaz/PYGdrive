@@ -4,7 +4,7 @@ import os
 from io import FileIO
 from json import loads, dump
 from flask import Flask, request
-from telegram import Update, ParseMode
+from telegram import Update, ParseMode, BotCommand
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -13,11 +13,14 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from datetime import datetime
 from threading import Thread
 
-app = Flask(__name__)
+app = Flask('auth')
 
-TELEGRAM_TOKEN = '5656563536:AAExRVjfF6RNlZUFmswjivhbnznLDCkWmkM'
+TELEGRAM_TOKEN = '5846418480:AAF0X1KlpmQz_Srj-oQfhgBWBCR71p3-jgY'
+# ссылка, на которую будет перенаправлять бот для аунтефикации на гугл диске
+# Чтобы изменить нужно добавить ссылку в консоли разработчика google
 REDIRECT_URI = 'http://localhost:5000/'
-#REDIRECT_URI = 'https://d3b5-95-179-127-249.ngrok-free.app/'
+
+# Консоль разработчика google
 CLIENT_ID = '137149159399-mb30j804ik650qhpb2artqqbe1uuj9rq.apps.googleusercontent.com'
 CLIENT_SECRET = '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'
 
@@ -57,12 +60,13 @@ def index():
     <body>
         <div id="container">
             <h2>Вы успешно авторизованы</h2>
-            <p>Ваш одноразовый код авторизации:</p>
+            <p>Отправьте Ваш одноразоый код авторизации боту:</p>
             <span id="auth-code">/auth {code}</span>
             <button onClick="clip_text(document.getElementById('auth-code').innerHTML)">Скопировать</button>
         </div>
     </body>
-</html>'''
+</html>
+'''
 
 
 def load_users(file):
@@ -75,10 +79,12 @@ def load_users(file):
 
 user_credentials = load_users('auth_users.txt')
 
+
 # Функция для аутентификации пользователя в Google Диске
 def authenticate(update: Update, context):
     user_id = update.message.from_user.id
     print(user_id, list(user_credentials.keys()))
+    print(str(user_id) in list(user_credentials.keys()))
     if str(user_id) in list(user_credentials.keys()):
         # Пользователь уже аутентифицирован
         return build('drive', 'v3', credentials=Credentials.from_authorized_user_info(
@@ -112,10 +118,6 @@ def help(update: Update, context):
                               '/download - скачать файл с Google Диска\n' +
                               '/copy - создать копию файла на Google Диске\n\n' +
                               'Отправьте файл боту для загрузки на Google Диск')
-
-
-def delete_file(file_path):
-    os.remove(file_path)
 
 
 # Функция для обработки сообщений с медиафайлами
@@ -158,7 +160,6 @@ def handle_media(update: Update, context):
 
     update.message.reply_text(f'[Ссылка на файл](https://drive.google.com/file/d/{file.get("id")}/view?usp=share_link)',
                               parse_mode=ParseMode.MARKDOWN_V2)
-    delete_file(file_path)
 
 
 # Функция для обработки команды /list
@@ -269,7 +270,7 @@ def search(update: Update, context):
         update.message.reply_text(f'Найденные файлы:')
         for item in items:
             update.message.reply_text(f'{item["name"]}\n' +
-                                      'ID <code>{item["id"]}</code>',
+                                      f'ID <code>{item["id"]}</code>',
                                       parse_mode='HTML')
 
 
@@ -314,6 +315,7 @@ def copy(update: Update, context):
     copied_file = {'name': f'Копия {file_name}'}
     file = service.files().copy(fileId=file_id,
                                 body=copied_file).execute()
+
     update.message.reply_text(
         f'Создана копия файла "{file_name}" на Google Диске.\n' +
         f'ID копии: <code>{file.get("id")}</code>',
@@ -322,6 +324,8 @@ def copy(update: Update, context):
 
 # Функция для обработки команды /auth
 def auth(update: Update, context):
+    global user_credentials
+
     if len(context.args) == 0:
         update.message.reply_text('Пожалуйста, укажите код аутентификации /auth [код]')
         return
@@ -333,12 +337,12 @@ def auth(update: Update, context):
         'code': auth_code,
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
-        'redirect_uri': 'http://localhost:5000/',
+        'redirect_uri': REDIRECT_URI,
         'grant_type': 'authorization_code'
     }
     response = requests.post('https://accounts.google.com/o/oauth2/token', data=data)
     response_data = response.json()
-    print(response_data)
+    print(data, response_data)
 
     refresh_token = response_data['refresh_token']
     inf = {
@@ -352,7 +356,7 @@ def auth(update: Update, context):
         'refresh_token': refresh_token
     }
 
-    user_credentials[user_id] = inf
+    user_credentials[str(user_id)] = inf
     with open('auth_users.txt', 'w') as f:
         dump(user_credentials, f)
 
@@ -383,10 +387,25 @@ def main():
             handle_media)
     )
 
+    commands = [
+        BotCommand("start", "запустить бота"),
+        BotCommand("help", "получить список доступных команд"),
+        BotCommand("list", "показать список файлов на Google Диске"),
+        BotCommand("delete", "удалить файл с Google Диска"),
+        BotCommand("mkdir", "создать папку на Google Диске"),
+        BotCommand("move", "переместить файл между папками"),
+        BotCommand("search", "выполнить поиск файла на Google Диске"),
+        BotCommand("download", "скачать файл с Google Диска"),
+        BotCommand("copy", "создать копию файла на Google Диске"),
+        BotCommand("auth", "ввести код аутентификации")
+    ]
+
+    updater.bot.set_my_commands(commands)
+
     updater.start_polling()
 
 
 if __name__ == '__main__':
-    bot = Thread(target=main)
-    bot.start()
+    PYG = Thread(target=main)
+    PYG.start()
     app.run()
